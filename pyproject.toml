@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "microscopic_remaining_oil_dynamic_evolution"
+version = "0.1.0"
+description = "A python package for dynamic evolution of microscopic remaining oil."
+authors = ["etocs <your-email@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+torch = "*"
+torchvision = "*"
+numpy = "*"
+pandas = "*"
+scikit-learn = "*"
+pyyaml = "*"
+tqdm = "*"
