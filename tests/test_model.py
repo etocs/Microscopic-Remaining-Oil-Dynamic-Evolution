@@ -45,6 +45,16 @@ class FusionModelTest(unittest.TestCase):
             )
         )
         self.assertTrue(torch.all(outputs["velocity"] >= 0))
+        # physics_weight = 1.0 should collapse corrected velocity to Darcy velocity.
+        model_full_physics = FusionModel(static_channels=1, dynamic_features=5, physics_weight=1.0)
+        outputs_full = model_full_physics(
+            static_volume=static_volume,
+            dynamic_sequence=dynamic_sequence,
+            permeability=permeability,
+            viscosity=viscosity,
+            pressure_gradient=pressure_gradient,
+        )
+        self.assertTrue(torch.allclose(outputs_full["velocity"], outputs_full["darcy_velocity"]))
 
     def test_loss_combines_prediction_and_darcy(self) -> None:
         model = FusionModel(static_channels=1, dynamic_features=5, physics_weight=0.1)
@@ -95,6 +105,14 @@ class FusionModelTest(unittest.TestCase):
         )
         self.assertIn("loss", outputs)
         self.assertGreaterEqual(outputs["loss"].item(), 0.0)
+        expected_loss = PhysicalConstraintLoss()(
+            {k: v for k, v in outputs.items() if k != "loss"},
+            targets,
+            permeability,
+            viscosity,
+            pressure_gradient,
+        )
+        self.assertAlmostEqual(outputs["loss"].item(), expected_loss.item(), places=6)
 
 
 class PreprocessTest(unittest.TestCase):
@@ -109,6 +127,13 @@ class PreprocessTest(unittest.TestCase):
         self.assertEqual(processed.shape, (30, 2))
         self.assertTrue(torch.all(processed >= 0))
         self.assertTrue(torch.all(processed <= 1))
+        mid_idx = processed.shape[0] // 2
+        original_steps = seq.shape[0]
+        # Expected normalized midpoint after linear interpolation across the original timeline.
+        x_new = (mid_idx / (processed.shape[0] - 1)) * (original_steps - 1)
+        expected_mid = x_new / (original_steps - 1)
+        self.assertAlmostEqual(processed[mid_idx, 0].item(), expected_mid, places=2)
+        self.assertAlmostEqual(processed[mid_idx, 1].item(), 1 - expected_mid, places=2)
 
 
 if __name__ == "__main__":

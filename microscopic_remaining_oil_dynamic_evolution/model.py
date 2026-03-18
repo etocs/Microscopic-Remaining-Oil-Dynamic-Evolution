@@ -52,6 +52,7 @@ class LSTMEncoder(nn.Module):
 
     Input shape: (batch, seq_len, feature_dim)
     Output: 512-d vector summarizing temporal evolution.
+    Note: LSTM dropout is applied only when num_layers > 1 (PyTorch behavior).
     """
 
     output_dim: int = 512
@@ -64,6 +65,8 @@ class LSTMEncoder(nn.Module):
         dropout: float = 0.2,
     ) -> None:
         super().__init__()
+        if num_layers < 1:
+            raise ValueError("num_layers must be at least 1 for LSTMEncoder.")
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
@@ -82,7 +85,8 @@ class LSTMEncoder(nn.Module):
         # We only need the last timestep hidden state from both directions.
         _, (h_n, _) = self.lstm(x)
         # h_n shape: (num_layers * num_directions, batch, hidden_size)
-        # Take the last layer from both directions and concatenate.
+        # Ordering is [layer0_fwd, layer0_bwd, layer1_fwd, layer1_bwd]; indices -2/-1
+        # pick the top layer's forward and backward states.
         forward_final = h_n[-2]
         backward_final = h_n[-1]
         final_state = torch.cat([forward_final, backward_final], dim=1)
@@ -101,7 +105,7 @@ class ChannelAttention(nn.Module):
             nn.Linear(channels, reduced),
             nn.ReLU(inplace=True),
             nn.Linear(reduced, channels),
-            nn.Softmax(dim=1),
+            nn.Sigmoid(),
         )
 
     def forward(self, x: Tensor) -> Tensor:
@@ -144,11 +148,11 @@ class FusionModel(nn.Module):
         permeability: Tensor, viscosity: Tensor, pressure_gradient: Tensor
     ) -> Tensor:
         """
-        Compute seepage velocity based on Darcy's law v = μ * K * ∇P.
-        Shapes are broadcast-safe; inputs are expected to be (batch, 1) or
-        broadcastable to the prediction shape.
+        Compute seepage velocity based on Darcy's law v = (K / μ) * ∇P.
+        Shapes are broadcast-safe; inputs are expected to be (batch, 1) or broadcastable
+        to the prediction shape.
         """
-        return viscosity * permeability * pressure_gradient
+        return (permeability / (viscosity + 1e-6)) * pressure_gradient
 
     def forward(
         self,
@@ -201,7 +205,8 @@ class PhysicalConstraintLoss(nn.Module):
         viscosity: Tensor,
         pressure_gradient: Tensor,
     ) -> Tensor:
-        loss = 0.0
+        device = predictions["velocity"].device
+        loss = torch.tensor(0.0, device=device)
         if "saturation" in targets:
             loss = loss + self.mse(predictions["saturation"], targets["saturation"])
         if "velocity" in targets:
